@@ -100,6 +100,9 @@ Language changes
   * Prefix `&` for by-reference arguments to `ccall` has been deprecated in favor of
     `Ref` argument types ([#6080]).
 
+  * The `RevString` type for lazily reversed strings has been moved to the LegacyStrings
+    package ([#22611]).
+
 Breaking changes
 ----------------
 
@@ -220,6 +223,9 @@ This section lists changes that do not have deprecation warnings.
   * `slicedim(b::BitVector, 1, x)` now consistently returns the same thing that `b[x]` would,
     consistent with its documentation. Previously it would return a `BitArray{0}` for scalar
     `x` ([#20233]).
+
+  * `reverse(::AbstractString)` now unconditionally returns a `String`. Previously it
+    returned a `RepString`, which has been removed from Base ([#23612]).
 
 Library improvements
 --------------------
@@ -1315,6 +1321,7 @@ Command-line option changes
 [#22532]: https://github.com/JuliaLang/julia/issues/22532
 [#22588]: https://github.com/JuliaLang/julia/issues/22588
 [#22605]: https://github.com/JuliaLang/julia/issues/22605
+[#22611]: https://github.com/JuliaLang/julia/issues/22611
 [#22666]: https://github.com/JuliaLang/julia/issues/22666
 [#22696]: https://github.com/JuliaLang/julia/issues/22696
 [#22703]: https://github.com/JuliaLang/julia/issues/22703
@@ -1344,3 +1351,4 @@ Command-line option changes
 [#23233]: https://github.com/JuliaLang/julia/issues/23233
 [#23342]: https://github.com/JuliaLang/julia/issues/23342
 [#23404]: https://github.com/JuliaLang/julia/issues/23404
+[#23612]: https://github.com/JuliaLang/julia/issues/23612

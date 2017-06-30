@@ -1855,6 +1855,9 @@ end
     nothing
 end
 
+# Issue #22611
+@deprecate_moved RevString "LegacyStrings"
+
 # END 0.7 deprecations
 
 # BEGIN 1.0 deprecations
