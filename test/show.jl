@@ -384,7 +384,7 @@ function f13127()
     show(buf, f)
     String(take!(buf))
 end
-@test f13127() == "$(curmod_prefix)f"
+@test startswith(f13127(), "getfield($(@__MODULE__), Symbol(\"")
 
 let a = Pair(1.0,2.0)
     @test sprint(show,a) == "1.0=>2.0"
@@ -596,7 +596,7 @@ let sv = Core.svec(:a, :b, :c)
     @test repr == "SimpleVector\n  1: Symbol a\n  2: Symbol b\n  3: #undef\n"
 end
 let repr = sprint(dump, sin)
-    @test repr == "sin (function of type Base.#sin)\n"
+    @test repr == "sin (function of type typeof(sin))\n"
 end
 let repr = sprint(dump, Base.Test)
     @test repr == "Module Base.Test\n"
@@ -669,3 +669,171 @@ let m = which(T20332{Int}(), (Int,)),
 end
 
 @test sprint(show, Main) == "Main"
+
+@test sprint(Base.show_supertypes, Int64) == "Int64 <: Signed <: Integer <: Real <: Number <: Any"
+@test sprint(Base.show_supertypes, Vector{String}) == "Array{String,1} <: DenseArray{String,1} <: AbstractArray{String,1} <: Any"
+
+# static_show
+
+function static_shown(x)
+    p = Pipe()
+    Base.link_pipe(p; julia_only_read=true, julia_only_write=true)
+    ccall(:jl_static_show, Void, (Ptr{Void}, Any), p.in, x)
+    @async close(p.in)
+    return read(p.out, String)
+end
+
+# Test for PR 17803
+@test static_shown(Int128(-1)) == "Int128(0xffffffffffffffffffffffffffffffff)"
+
+# PR #22160
+@test static_shown(:aa) == ":aa"
+@test static_shown(:+) == ":+"
+@test static_shown(://) == "://"
+@test static_shown(://=) == "://="
+@test static_shown(Symbol("")) == "Symbol(\"\")"
+@test static_shown(Symbol("a/b")) == "Symbol(\"a/b\")"
+@test static_shown(Symbol("a-b")) == "Symbol(\"a-b\")"
+
+@test static_shown(QuoteNode(:x)) == ":(:x)"
+
+# Test @show
+let fname = tempname()
+    try
+        open(fname, "w") do fout
+            redirect_stdout(fout) do
+                @show zeros(2, 2)
+            end
+        end
+        @test read(fname, String) == "zeros(2, 2) = 2×2 Array{Float64,2}:\n 0.0  0.0\n 0.0  0.0\n"
+    finally
+        rm(fname, force=true)
+    end
+end
+
+struct f_with_params{t} <: Function
+end
+
+(::f_with_params)(x) = 2x
+
+let io = IOBuffer()
+    show(io, MIME"text/html"(), f_with_params.body.name.mt)
+    @test contains(String(take!(io)), "f_with_params")
+end
+
+@testset "printing of Val's" begin
+    @test sprint(show, Val(Float64))  == "Val{Float64}()"  # Val of a type
+    @test sprint(show, Val(:Float64)) == "Val{:Float64}()" # Val of a symbol
+    @test sprint(show, Val(true))     == "Val{true}()"     # Val of a value
+end
+
+@testset "printing of Pair's" begin
+    for (p, s) in (Pair(1.0,2.0)                          => "1.0 => 2.0",
+                   Pair(Pair(1,2), Pair(3,4))             => "(1=>2) => (3=>4)",
+                   Pair{Integer,Int64}(1, 2)              => "Pair{Integer,Int64}(1, 2)",
+                   (Pair{Integer,Int64}(1, 2) => 3)       => "Pair{Integer,Int64}(1, 2) => 3",
+                   ((1+2im) => (3+4im))                   => "1+2im => 3+4im",
+                   (1 => 2 => Pair{Real,Int64}(3, 4))     => "1 => (2=>Pair{Real,Int64}(3, 4))")
+
+        @test sprint(show, p) == s
+    end
+    # - when the context has :compact=>false, print pair's member non-compactly
+    # - if one member is printed as "Pair{...}(...)", no need to put parens around
+    s = IOBuffer()
+    show(IOContext(s, :compact => false), (1=>2) => Pair{Any,Any}(3,4))
+    @test String(take!(s)) == "(1 => 2) => Pair{Any,Any}(3, 4)"
+end
+
+@testset "alignment for pairs" begin  # (#22899)
+    @test replstr([1=>22,33=>4]) == "2-element Array{Pair{$Int,$Int},1}:\n  1 => 22\n 33 => 4 "
+    # first field may have "=>" in its representation
+    @test replstr(Pair[(1=>2)=>3, 4=>5]) ==
+        "2-element Array{Pair,1}:\n (1=>2) => 3\n      4 => 5"
+    @test replstr(Any[Dict(1=>2)=> (3=>4), 1=>2]) ==
+        "2-element Array{Any,1}:\n Dict(1=>2) => (3=>4)\n          1 => 2     "
+    # left-alignment when not using the "=>" symbol
+    @test replstr(Pair{Integer,Int64}[1=>2, 33=>4]) ==
+        "2-element Array{Pair{Integer,Int64},1}:\n Pair{Integer,Int64}(1, 2) \n Pair{Integer,Int64}(33, 4)"
+end
+
+@testset "display arrays non-compactly when size(⋅, 2) == 1" begin
+    # 0-dim
+    @test replstr(zeros(Complex{Int})) == "0-dimensional Array{Complex{$Int},0}:\n0 + 0im"
+    A = Array{Pair}(); A[] = 1=>2
+    @test replstr(A) == "0-dimensional Array{Pair,0}:\n1 => 2"
+    # 1-dim
+    @test replstr(zeros(Complex{Int}, 2)) ==
+        "2-element Array{Complex{$Int},1}:\n 0 + 0im\n 0 + 0im"
+    @test replstr([1=>2, 3=>4]) == "2-element Array{Pair{$Int,$Int},1}:\n 1 => 2\n 3 => 4"
+    # 2-dim
+    @test replstr(zeros(Complex{Int}, 2, 1)) ==
+        "2×1 Array{Complex{$Int},2}:\n 0 + 0im\n 0 + 0im"
+    @test replstr(zeros(Complex{Int}, 1, 2)) ==
+        "1×2 Array{Complex{$Int},2}:\n 0+0im  0+0im"
+    @test replstr([1=>2 3=>4]) == "1×2 Array{Pair{$Int,$Int},2}:\n 1=>2  3=>4"
+    @test replstr([1=>2 for x in 1:2, y in 1:1]) ==
+        "2×1 Array{Pair{$Int,$Int},2}:\n 1 => 2\n 1 => 2"
+    # 3-dim
+    @test replstr(zeros(Complex{Int}, 1, 1, 1)) ==
+        "1×1×1 Array{Complex{$Int},3}:\n[:, :, 1] =\n 0 + 0im"
+    @test replstr(zeros(Complex{Int}, 1, 2, 1)) ==
+        "1×2×1 Array{Complex{$Int},3}:\n[:, :, 1] =\n 0+0im  0+0im"
+end
+
+@testset "Array printing with limited rows" begin
+    arrstr = let buf = IOBuffer()
+        function (A, rows)
+            Base.showarray(IOContext(buf, displaysize=(rows, 80), limit=true),
+                           A, false, header=true)
+            String(take!(buf))
+        end
+    end
+    A = Int64[1]
+    @test arrstr(A, 4) == "1-element Array{Int64,1}: …"
+    @test arrstr(A, 5) == "1-element Array{Int64,1}:\n 1"
+    push!(A, 2)
+    @test arrstr(A, 5) == "2-element Array{Int64,1}:\n ⋮"
+    @test arrstr(A, 6) == "2-element Array{Int64,1}:\n 1\n 2"
+    push!(A, 3)
+    @test arrstr(A, 6) == "3-element Array{Int64,1}:\n 1\n ⋮"
+
+    @test arrstr(zeros(4, 3), 4)  == "4×3 Array{Float64,2}: …"
+    @test arrstr(zeros(4, 30), 4) == "4×30 Array{Float64,2}: …"
+    @test arrstr(zeros(4, 3), 5)  == "4×3 Array{Float64,2}:\n ⋮      ⋱  "
+    @test arrstr(zeros(4, 30), 5) == "4×30 Array{Float64,2}:\n ⋮      ⋱  "
+    @test arrstr(zeros(4, 3), 6)  == "4×3 Array{Float64,2}:\n 0.0  0.0  0.0\n ⋮            "
+    @test arrstr(zeros(4, 30), 6) ==
+              string("4×30 Array{Float64,2}:\n",
+                     " 0.0  0.0  0.0  0.0  0.0  0.0  0.0  0.0  …  0.0  0.0  0.0  0.0  0.0  0.0  0.0\n",
+                     " ⋮                        ⋮              ⋱            ⋮                      ")
+end
+
+module UnexportedOperators
+function + end
+function == end
+end
+
+@testset "Parseable printing of types" begin
+    @test repr(typeof(print)) == "typeof(print)"
+    @test repr(typeof(Base.show_default)) == "typeof(Base.show_default)"
+    @test repr(typeof(UnexportedOperators.:+)) == "typeof($(curmod_prefix)UnexportedOperators.:+)"
+    @test repr(typeof(UnexportedOperators.:(==))) == "typeof($(curmod_prefix)UnexportedOperators.:(==))"
+    anonfn = x->2x
+    modname = string(@__MODULE__)
+    anonfn_type_repr = "getfield($modname, Symbol(\"$(typeof(anonfn).name.name)\"))"
+    @test repr(typeof(anonfn)) == anonfn_type_repr
+    @test repr(anonfn) == anonfn_type_repr * "()"
+    @test stringmime("text/plain", anonfn) == "$(typeof(anonfn).name.mt.name) (generic function with 1 method)"
+    mkclosure = x->y->x+y
+    clo = mkclosure(10)
+    @test stringmime("text/plain", clo) == "$(typeof(clo).name.mt.name) (generic function with 1 method)"
+end
+
+let x = TypeVar(:_), y = TypeVar(:_)
+    @test repr(UnionAll(x, UnionAll(y, Pair{x,y}))) == "Pair{_1,_2} where _2 where _1"
+    @test repr(UnionAll(x, UnionAll(y, Pair{UnionAll(x,Ref{x}),y}))) == "Pair{Ref{_1} where _1,_1} where _1"
+    x = TypeVar(:a)
+    y = TypeVar(:a)
+    z = TypeVar(:a)
+    @test repr(UnionAll(z, UnionAll(x, UnionAll(y, Tuple{x,y,z})))) == "Tuple{a1,a2,a} where a2 where a1 where a"
+end
