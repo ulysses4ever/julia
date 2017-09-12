@@ -36,6 +36,39 @@ Close1Open2(::Type{T}=Float64) where {T<:AbstractFloat} = Close1Open2{T}()
 
 const BitFloatType = Union{Type{Float16},Type{Float32},Type{Float64}}
 
+abstract type State end
+
+# for BaseBenchmarks
+RangeGenerator(x) = State(Base.Random.GLOBAL_RNG, x)
+
+# default fall-back State for all RNGs
+State(::AbstractRNG, X) = State(X)
+State(::AbstractRNG, ::Type{X}) where {X} = State(X)
+
+State(rng::AbstractRNG, st::State) =
+    throw(ArgumentError("State for this object is not defined"))
+
+struct StateType{T} <: State end
+
+State(::Type{T}) where {T} = StateType{T}() # default fall-back for types
+
+Base.getindex(st::StateType{T}) where {T} = T
+
+struct StateTrivial{T} <: State
+    self::T
+end
+
+State(X) = StateTrivial(X) # default fall-back for non-types
+
+Base.getindex(st::StateTrivial) = st.self
+
+struct StateSimple{T,S} <: State
+    self::T
+    state::S
+end
+
+Base.getindex(st::StateSimple) = st.self
+
 function __init__()
     try
         srand()
