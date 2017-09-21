@@ -167,6 +167,21 @@ fake_repl() do stdin_write, stdout_read, repl
     close(t)
     readuntil(stdout_read, "\n\n")
 
+    # Test that module prefix is omitted when type is reachable from Main
+    write(stdin_write, "module TestShowTypeREPL; export TypeA; struct TypeA end; end\n")
+    readline(stdout_read)
+    readline(stdout_read)
+    readline(stdout_read)
+    write(stdin_write, "TestShowTypeREPL.TypeA\n")
+    @test endswith(readline(stdout_read), "\r\e[7CTestShowTypeREPL.TypeA\r\e[29C")
+    readline(stdout_read)
+    write(stdin_write, "using .TestShowTypeREPL\n")
+    readline(stdout_read)
+    readline(stdout_read)
+    write(stdin_write, "TypeA\n")
+    readline(stdout_read)
+    @test endswith(readline(stdout_read), "\r\e[7CTypeA\r\e[12C")
+
     # Issue #10222
     # Test ignoring insert key in standard and prefix search modes
     write(stdin_write, "\e[2h\e[2h\n") # insert (VT100-style)
