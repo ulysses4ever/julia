@@ -1828,6 +1828,13 @@ end
 
 @deprecate contains(eq::Function, itr, x) any(y->eq(y,x), itr)
 
+# PR #23757
+import .SparseArrays.spdiagm
+@deprecate spdiagm(x::AbstractVector) sparse(Diagonal(x))
+@deprecate spdiagm(x::AbstractVector, d::Number) spdiagm(x => d)
+@deprecate spdiagm(x, d) spdiagm((x[i] => d[i] for i in 1:length(x))...)
+@deprecate spdiagm(x, d, m::Integer, n::Integer) spdiagm((x[i] => d[i] for i in 1:length(x))...)
+
 # PR #23690
 # `SSHCredentials` and `UserPasswordCredentials` constructors using `prompt_if_incorrect`
 # are deprecated in base/libgit2/types.jl.

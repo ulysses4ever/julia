@@ -217,6 +217,10 @@ This section lists changes that do not have deprecation warnings.
     longer the case; now bindings will only exist for packages brought into scope by
     typing `using Package` or `import Package` ([#17997]).
 
+  * `spdiagm` now always return a square matrix.
+    To explicitly provide a resulting size `m × n` use:
+    `I, J, V = SparseArrays.spdiagm_internal(args); sparse(I, J, V, m, n)` ([#23757]).
+
   * `slicedim(b::BitVector, 1, x)` now consistently returns the same thing that `b[x]` would,
     consistent with its documentation. Previously it would return a `BitArray{0}` for scalar
     `x` ([#20233]).
@@ -469,6 +473,13 @@ Deprecated or removed
     as `Base._isleaftype` ([#17086]).
 
   * `contains(eq, itr, item)` is deprecated in favor of `any` with a predicate ([#23716]).
+
+  * `spdiagm(x::AbstractVector)` has been deprecated in favor of `sparse(Diagonal(x))` ([#23757]).
+
+  * `spdiagm(x::AbstractVector, d::Integer)` has been deprecated in favor of `spdiagm(x => d)` ([#23757]).
+
+  * `spdiagm(x::Tuple{<:AbstractVector}, d::Tuple{<:Integer})` has been deprecated in favor of
+    `spdiagm(x[1] => d[1], x[2] => d[2], ...)` ([#23757]).
 
   * Constructors for `LibGit2.UserPasswordCredentials` and `LibGit2.SSHCredentials` which take a
     `prompt_if_incorrect` argument are deprecated. Instead, prompting behavior is controlled using

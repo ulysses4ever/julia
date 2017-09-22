@@ -1117,7 +1117,7 @@ For expert drivers and additional information, see [`permute!`](@ref).
 
 # Examples
 ```jldoctest
-julia> A = spdiagm(0 => [1, 2, 3, 4], 1 => [5, 6, 7])
+julia> A = spdiagm([1, 2, 3, 4] => 0, [5, 6, 7] => 1)
 4×4 SparseMatrixCSC{Int64,Int64} with 7 stored entries:
   [1, 1]  =  1
   [1, 2]  =  5
@@ -1174,7 +1174,7 @@ and no space beyond that passed in. If `trim` is `true`, this method trims `A.ro
 
 # Examples
 ```jldoctest
-julia> A = spdiagm([1, 2, 3, 4])
+julia> A = sparse(Diagonal([1, 2, 3, 4]))
 4×4 SparseMatrixCSC{Int64,Int64} with 4 stored entries:
   [1, 1]  =  1
   [2, 2]  =  2
@@ -2953,7 +2953,7 @@ stored and otherwise do nothing. Derivative forms:
 
 # Examples
 ```jldoctest
-julia> A = spdiagm([1, 2, 3, 4])
+julia> A = sparse(Diagonal([1, 2, 3, 4]))
 4×4 SparseMatrixCSC{Int64,Int64} with 4 stored entries:
   [1, 1]  =  1
   [2, 2]  =  2
@@ -3299,23 +3299,23 @@ function istril(A::SparseMatrixCSC)
 end
 
 
-function spdiagm_internal(kv::Pair{<:Integer, <:AbstractVector}...)
+function spdiagm_internal(kv::Pair{<:AbstractVector, <:Integer}...)
     ncoeffs = 0
     for p in kv
-        ncoeffs += length(p.second)
+        ncoeffs += length(p.first)
     end
     I = Vector{Int}(ncoeffs)
     J = Vector{Int}(ncoeffs)
-    V = Vector{promote_type(map(x -> eltype(x.second), kv)...)}(ncoeffs)
+    V = Vector{promote_type(map(x -> eltype(x.first), kv)...)}(ncoeffs)
     i = 0
     for p in kv
-        numel = length(p.second)
-        if p.first < 0
-            row = -p.first
+        numel = length(p.first)
+        if p.second < 0
+            row = -p.second
             col = 0
-        elseif p.first > 0
+        elseif p.second > 0
             row = 0
-            col = p.first
+            col = p.second
         else
             row = 0
             col = 0
@@ -3323,21 +3323,21 @@ function spdiagm_internal(kv::Pair{<:Integer, <:AbstractVector}...)
         r = 1+i:numel+i
         I[r] = row+1:row+numel
         J[r] = col+1:col+numel
-        copy!(view(V, r), p.second)
+        copy!(view(V, r), p.first)
         i += numel
     end
     return I, J, V
 end
 
 """
-    spdiagm(kv::Pair{<:Integer, <:AbstractVector}...)
+    spdiagm(kv::Pair{<:AbstractVector, <:Integer}...)
 
-Construct a sparse diagonal matrix from the diagonal-number/vector pair `kv`,
-placing each vector `kv.second` on the `kv.first` diagonal.
+Construct a sparse diagonal matrix from pairs of vectors and diagonals.
+Vector `kv.first` will be placed on the `kv.second` diagonal.
 
 # Examples
 ```jldoctest
-julia> spdiagm(-1 => [1,2,3,4], 1 => [4,3,2,1])
+julia> spdiagm([1,2,3,4] => -1, [4,3,2,1] => 1)
 5×5 SparseMatrixCSC{Int64,Int64} with 8 stored entries:
   [2, 1]  =  1
   [1, 2]  =  4
@@ -3349,7 +3349,7 @@ julia> spdiagm(-1 => [1,2,3,4], 1 => [4,3,2,1])
   [4, 5]  =  1
 ```
 """
-function spdiagm(kv::Pair{<:Integer, <:AbstractVector}...)
+function spdiagm(kv::Pair{<:AbstractVector, <:Integer}...)
     I, J, V = spdiagm_internal(kv...)
     n = max(dimlub(I), dimlub(J))
     return sparse(I, J, V, n, n)
