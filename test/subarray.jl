@@ -575,3 +575,8 @@ let
     @test Base.IndexStyle(view(a, :, :)) == Base.IndexLinear()
     @test isbits(view(a, :, :))
 end
+
+let
+    s = view(reshape(1:6, 2, 3), 1:2, 1:2)
+    @test @inferred(s[2,2,1]) === 4
+end
