@@ -27,11 +27,11 @@ extern "C" {
 static int jl_unw_init(bt_cursor_t *cursor, bt_context_t *context);
 static int jl_unw_step(bt_cursor_t *cursor, uintptr_t *ip, uintptr_t *sp);
 
-size_t jl_unw_stepn(bt_cursor_t *cursor, uintptr_t *ip, uintptr_t *sp, size_t maxsize)
+size_t jl_unw_stepn(bt_cursor_t *cursor, uintptr_t *ip, uintptr_t *sp, size_t maxsize, int add_interp_frames)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
     volatile size_t n = 0;
-    uintptr_t nullsp;
+    uintptr_t thesp;
 #if defined(_OS_WINDOWS_) && !defined(_CPU_X86_64_)
     assert(!jl_in_stackwalk);
     jl_in_stackwalk = 1;
@@ -47,9 +47,15 @@ size_t jl_unw_stepn(bt_cursor_t *cursor, uintptr_t *ip, uintptr_t *sp, size_t ma
                n = maxsize; // return maxsize + 1 if ran out of space
                break;
            }
-           if (!jl_unw_step(cursor, &ip[n], sp ? &sp[n] : &nullsp))
+           if (!jl_unw_step(cursor, &ip[n], &thesp))
                break;
-           n++;
+           if (sp)
+                sp[n] = thesp;
+            if (add_interp_frames && jl_is_enter_interpreter_frame(ip[n])) {
+                n += jl_capture_interp_frame(&ip[n], thesp, maxsize-n-1) + 1;
+            } else {
+                n++;
+            }
         }
         n++;
 #if !defined(_OS_WINDOWS_)
@@ -76,7 +82,7 @@ size_t rec_backtrace_ctx(uintptr_t *data, size_t maxsize,
     bt_cursor_t cursor;
     if (!jl_unw_init(&cursor, context))
         return 0;
-    n = jl_unw_stepn(&cursor, data, NULL, maxsize);
+    n = jl_unw_stepn(&cursor, data, NULL, maxsize, 1);
     return n > maxsize ? maxsize : n;
 }
 
@@ -110,7 +116,7 @@ JL_DLLEXPORT jl_value_t *jl_backtrace_from_here(int returnsp)
             jl_array_grow_end(ip, maxincr);
             if (returnsp) jl_array_grow_end(sp, maxincr);
             n = jl_unw_stepn(&cursor, (uintptr_t*)jl_array_data(ip) + offset,
-                    returnsp ? (uintptr_t*)jl_array_data(sp) + offset : NULL, maxincr);
+                    returnsp ? (uintptr_t*)jl_array_data(sp) + offset : NULL, maxincr, 0);
             offset += maxincr;
         } while (n > maxincr);
         jl_array_del_end(ip, maxincr - n);
@@ -121,18 +127,11 @@ JL_DLLEXPORT jl_value_t *jl_backtrace_from_here(int returnsp)
     return bt;
 }
 
-JL_DLLEXPORT jl_value_t *jl_get_backtrace(void)
+JL_DLLEXPORT uintptr_t *jl_get_backtrace_buffer(size_t *bt_size)
 {
     jl_ptls_t ptls = jl_get_ptls_states();
-    jl_array_t *bt = NULL;
-    JL_GC_PUSH1(&bt);
-    if (array_ptr_void_type == NULL) {
-        array_ptr_void_type = jl_apply_type2((jl_value_t*)jl_array_type, (jl_value_t*)jl_voidpointer_type, jl_box_long(1));
-    }
-    bt = jl_alloc_array_1d(array_ptr_void_type, ptls->bt_size);
-    memcpy(bt->data, ptls->bt_data, ptls->bt_size * sizeof(void*));
-    JL_GC_POP();
-    return (jl_value_t*)bt;
+    *bt_size = ptls->bt_size;
+    return ptls->bt_data;
 }
 
 
@@ -337,7 +336,7 @@ size_t rec_backtrace_ctx_dwarf(uintptr_t *data, size_t maxsize,
     bt_cursor_t cursor;
     if (!jl_unw_init_dwarf(&cursor, context))
         return 0;
-    n = jl_unw_stepn(&cursor, data, NULL, maxsize);
+    n = jl_unw_stepn(&cursor, data, NULL, maxsize, 1);
     return n > maxsize ? maxsize : n;
 }
 #endif

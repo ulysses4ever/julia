@@ -706,6 +706,9 @@ STATIC_INLINE char *jl_copy_str(char **to, const char *from)
     memcpy(*to, from, len);
     return *to;
 }
+JL_DLLEXPORT int jl_is_interpreter_frame(uintptr_t ip);
+JL_DLLEXPORT int jl_is_enter_interpreter_frame(uintptr_t ip);
+JL_DLLEXPORT size_t jl_capture_interp_frame(uintptr_t *data, uintptr_t sp, size_t space_remaining);
 
 // timers
 // Returns time in nanosec

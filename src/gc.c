@@ -195,15 +195,15 @@ static void jl_gc_run_finalizers_in_list(jl_ptls_t ptls, arraylist_t *list)
     jl_value_t *exc = ptls->exception_in_transit;
     jl_array_t *bt = NULL;
     JL_GC_PUSH2(&exc, &bt);
-    if (ptls->bt_size > 0)
-        bt = (jl_array_t*)jl_get_backtrace();
+    //if (ptls->bt_size > 0)
+    //    bt = (jl_array_t*)jl_get_backtrace();
     for (size_t i = 2;i < len;i += 2)
         run_finalizer(ptls, items[i], items[i + 1]);
     ptls->exception_in_transit = exc;
-    if (bt != NULL) {
-        ptls->bt_size = jl_array_len(bt);
-        memcpy(ptls->bt_data, bt->data, ptls->bt_size * sizeof(void*));
-    }
+    //if (bt != NULL) {
+    //    ptls->bt_size = jl_array_len(bt);
+    //    memcpy(ptls->bt_data, bt->data, ptls->bt_size * sizeof(void*));
+    //}
     JL_GC_POP();
     JL_GC_POP();
 }
@@ -2434,6 +2434,18 @@ static void jl_gc_queue_remset(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *sp, j
     ptls2->heap.rem_bindings.len = n_bnd_refyoung;
 }
 
+static void jl_gc_queue_bt_buf(jl_gc_mark_cache_t *gc_cache, gc_mark_sp_t *sp, jl_ptls_t ptls2)
+{
+    size_t n = 0;
+    while (n+2 < ptls2->bt_size) {
+        if (ptls2->bt_data[n] == (uintptr_t)-1) {
+            gc_mark_queue_obj(gc_cache, sp, (jl_value_t*)ptls2->bt_data[n+1]);
+            n += 2;
+        }
+        n++;
+    }
+}
+
 // Only one thread should be running in this function
 static int _jl_gc_collect(jl_ptls_t ptls, int full)
 {
@@ -2454,6 +2466,8 @@ static int _jl_gc_collect(jl_ptls_t ptls, int full)
         jl_gc_queue_remset(gc_cache, &sp, ptls2);
         // 2.2. mark every thread local root
         jl_gc_queue_thread_local(gc_cache, &sp, ptls2);
+        // 2.3. mark any managed objects in the backtrace buffer
+        jl_gc_queue_bt_buf(gc_cache, &sp, ptls2);
     }
 
     // 3. walk roots
