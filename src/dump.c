@@ -156,6 +156,12 @@ static uint64_t read_uint64(ios_t *s)
     return b0 | (b1<<32);
 }
 
+static void write_int64(ios_t *s, int64_t i)
+{
+    write_int32(s, (i>>32) & 0xffffffff);
+    write_int32(s, i       & 0xffffffff);
+}
+
 static void write_uint16(ios_t *s, uint16_t i)
 {
     write_uint8(s, (i>> 8) & 0xff);
@@ -1065,9 +1071,10 @@ static void write_work_list(ios_t *s)
 
 // serialize the global _require_dependencies array of pathnames that
 // are include depenencies
-static void write_dependency_list(ios_t *s)
+static int64_t write_dependency_list(ios_t *s, jl_array_t **udepsp)
 {
     size_t total_size = 0;
+    int64_t pos = 0;
     static jl_array_t *deps = NULL;
     if (!deps)
         deps = (jl_array_t*)jl_get_global(jl_base_module, jl_symbol("_require_dependencies"));
@@ -1080,10 +1087,9 @@ static void write_dependency_list(ios_t *s)
     jl_value_t *uniqargs[2] = {unique_func, (jl_value_t*)deps};
     size_t last_age = jl_get_ptls_states()->world_age;
     jl_get_ptls_states()->world_age = jl_world_counter;
-    jl_array_t *udeps = deps && unique_func ? (jl_array_t*)jl_apply(uniqargs, 2) : NULL;
+    jl_array_t *udeps = (*udepsp = deps && unique_func ? (jl_array_t*)jl_apply(uniqargs, 2) : NULL);
     jl_get_ptls_states()->world_age = last_age;
 
-    JL_GC_PUSH1(&udeps);
     if (udeps) {
         size_t l = jl_array_len(udeps);
         for (size_t i=0; i < l; i++) {
@@ -1093,7 +1099,7 @@ static void write_dependency_list(ios_t *s)
             slen += jl_string_len(dep);
             total_size += 8 + slen + 8;
         }
-        total_size += 4;
+        total_size += 4 + 8;
     }
     // write the total size so that we can quickly seek past all of the
     // dependencies if we don't need them
@@ -1113,8 +1119,11 @@ static void write_dependency_list(ios_t *s)
             write_float64(s, jl_unbox_float64(jl_fieldref(deptuple, 2)));  // mtime
         }
         write_int32(s, 0); // terminator, for ease of reading
+        // write a dummy file position to indicate the beginning of the source-text
+        pos = ios_pos(s);
+        write_int64(s, 0);
     }
-    JL_GC_POP();
+    return pos;
 }
 
 // --- deserialize ---
@@ -2286,18 +2295,18 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
 {
     char *tmpfname = strcat(strcpy((char *) alloca(strlen(fname)+8), fname), ".XXXXXX");
     ios_t f;
-    jl_array_t *mod_array;
+    jl_array_t *mod_array, *udeps;
     if (ios_mkstemp(&f, tmpfname) == NULL) {
         jl_printf(JL_STDERR, "Cannot open cache file \"%s\" for writing.\n", tmpfname);
         return 1;
     }
-    JL_GC_PUSH1(&mod_array);
+    JL_GC_PUSH2(&mod_array, &udeps);
     mod_array = jl_get_loaded_modules();
 
     serializer_worklist = worklist;
     write_header(&f);
     write_work_list(&f);
-    write_dependency_list(&f);
+    int64_t srctextpos = write_dependency_list(&f, &udeps);
     write_mod_list(&f, mod_array); // this can return errors during deserialize,
                                    // best to keep it early (before any actual initialization)
 
@@ -2319,7 +2328,6 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
         assert(jl_is_module(m));
         jl_collect_lambdas_from_mod(lambdas, m);
     }
-    JL_GC_POP();
 
     jl_collect_backedges(edges);
 
@@ -2332,15 +2340,40 @@ JL_DLLEXPORT int jl_save_incremental(const char *fname, jl_array_t *worklist)
     jl_serialize_value(&s, worklist);
     jl_serialize_value(&s, lambdas);
     jl_serialize_value(&s, edges);
-    jl_finalize_serializer(&s); // done with f
+    jl_finalize_serializer(&s);
     serializer_worklist = NULL;
 
     jl_gc_enable(en);
     htable_reset(&edges_map, 0);
     htable_reset(&backref_table, 0);
     arraylist_free(&reinit_list);
+
+    // Write the source-text for the dependent files
+    if (udeps) {
+        int64_t posfile = ios_pos(&f);
+        ios_seek(&f, srctextpos);
+        write_int64(&f, posfile);
+        ios_seek_end(&f);
+        len = jl_array_len(udeps);
+        ios_t srctext;
+        uint64_t filelen;
+        for (i = 0; i < len; i++) {
+            jl_value_t *deptuple = jl_array_ptr_ref(udeps, i);
+            jl_value_t *dep = jl_fieldref(deptuple, 1);  // file abspath
+            posfile = ios_pos(&f);
+            write_uint64(&f, 0);   // placeholder for length of this file in bytes
+            ios_t *srctextp = ios_file(&srctext, jl_string_data(dep), 1, 0, 0, 0);
+            filelen = (uint64_t) ios_copyall(&f, &srctext);
+            ios_close(&srctext);
+            assert(srctextp != NULL);
+            ios_seek(&f, posfile);
+            write_uint64(&f, filelen);
+            ios_seek_end(&f);
+        }
+    }
     ios_close(&f);
 
+    JL_GC_POP();
     if (jl_fs_rename(tmpfname, fname) < 0) {
         jl_printf(JL_STDERR, "Cannot write cache file \"%s\".\n", fname);
         return 1;
