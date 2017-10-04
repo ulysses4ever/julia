@@ -204,9 +204,9 @@ function print_without_params(x::ANY)
     return false
 end
 
-has_typevar(@nospecialize(t), v::TypeVar) = ccall(:jl_has_typevar, Cint, (Any, Any), t, v)!=0
+has_typevar(t :: ANY, v::TypeVar) = ccall(:jl_has_typevar, Cint, (Any, Any), t, v)!=0
 
-function io_has_tvar_name(io::IOContext, name::Symbol, @nospecialize(x))
+function io_has_tvar_name(io::IOContext, name::Symbol, x :: ANY)
     for (key, val) in io.dict
         if key === :unionall_env && val isa TypeVar && val.name === name && has_typevar(x, val)
             return true
@@ -214,7 +214,7 @@ function io_has_tvar_name(io::IOContext, name::Symbol, @nospecialize(x))
     end
     return false
 end
-io_has_tvar_name(io::IO, name::Symbol, @nospecialize(x)) = false
+io_has_tvar_name(io::IO, name::Symbol, x :: ANY) = false
 
 function show(io::IO, x::UnionAll)
     if print_without_params(x)
