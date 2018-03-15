@@ -136,9 +136,8 @@ For users coming to Julia from R, these are some noteworthy differences:
   * Julia does not provide `nrow` and `ncol`. Instead, use `size(M, 1)` for `nrow(M)` and `size(M, 2)`
     for `ncol(M)`.
   * Julia is careful to distinguish scalars, vectors and matrices.  In R, `1` and `c(1)` are the same.
-    In Julia, they can not be used interchangeably. One potentially confusing result of this is that
-    `x' * y` for vectors `x` and `y` is a 1-element vector, not a scalar. To get a scalar, use [`dot(x, y)`](@ref).
-  * Julia's [`diag()`](@ref) and [`diagm()`](@ref) are not like R's.
+    In Julia, they cannot be used interchangeably.
+  * Julia's [`diag`](@ref) and [`diagm`](@ref) are not like R's.
   * Julia cannot assign to the results of function calls on the left hand side of an assignment operation:
     you cannot write `diag(M) = ones(n)`.
   * Julia discourages populating the main namespace with functions. Most statistical functionality
@@ -146,7 +145,7 @@ For users coming to Julia from R, these are some noteworthy differences:
     For example:
 
       * Functions pertaining to probability distributions are provided by the [Distributions package](https://github.com/JuliaStats/Distributions.jl).
-      * The [DataFrames package](https://github.com/JuliaStats/DataFrames.jl) provides data frames.
+      * The [DataFrames package](https://github.com/JuliaData/DataFrames.jl) provides data frames.
       * Generalized linear models are provided by the [GLM package](https://github.com/JuliaStats/GLM.jl).
   * Julia provides tuples and real hash tables, but not R-style lists. When returning multiple items,
     you should typically use a tuple: instead of `list(a = 1, b = 2)`, use `(1, 2)`.

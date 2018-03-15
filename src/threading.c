@@ -94,7 +94,7 @@ jl_get_ptls_states_func jl_get_ptls_states_getter(void)
 // Apparently windows doesn't have a static TLS model (or one that can be
 // reliably used from a shared library) either..... Use `TLSAlloc` instead.
 
-static DWORD jl_tls_key;
+DWORD jl_tls_key;
 
 // Put this here for now. We can move this out later if we find more use for it.
 BOOLEAN WINAPI DllMain(IN HINSTANCE hDllHandle, IN DWORD nReason,
@@ -263,6 +263,8 @@ static void ti_initthread(int16_t tid)
 #ifndef _OS_WINDOWS_
     ptls->system_id = pthread_self();
 #endif
+    assert(ptls->world_age == 0);
+    ptls->world_age = 1; // OK to run Julia code on this thread
     ptls->tid = tid;
     ptls->pgcstack = NULL;
     ptls->gc_state = 0; // GC unsafe
