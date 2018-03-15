@@ -183,3 +183,16 @@ B = rand(7,2)
 
 # Issue 16520
 @test_throws DimensionMismatch ones(3,2)\(1:5)
+
+# Issue 22810
+let
+    A = zeros(1, 2)
+    B = zeros(1, 1)
+    @test A \ B == zeros(2, 1)
+    @test qrfact(A, Val{true}) \ B == zeros(2, 1)
+end
+
+@testset "Issue 24107" begin
+    A = rand(200,2)
+    @test A \ linspace(0,1,200) == A \ collect(linspace(0,1,200))
+end

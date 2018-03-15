@@ -1104,12 +1104,25 @@
                    (eq? (caar binds) '=))
               ;; some kind of assignment
               (cond
+               ((eventually-call? (cadar binds))
+                ;; f() = c
+                (let ((asgn (butlast (expand-forms (car binds))))
+                      (name (assigned-name (cadar binds))))
+                  (if (not (symbol? name))
+                      (error "invalid let syntax"))
+                  (loop (cdr binds)
+                        `(scope-block
+                          (block
+                           ,(if (expr-contains-eq name (caddar binds))
+                                `(local ,name) ;; might need a Box for recursive functions
+                                `(local-def ,name))
+                           ,asgn
+                           ,blk)))))
                ((or (symbol? (cadar binds))
                     (decl?   (cadar binds)))
                 (let ((vname (decl-var (cadar binds))))
                   (loop (cdr binds)
-                        (if (contains (lambda (x) (eq? x vname))
-                                      (caddar binds))
+                        (if (expr-contains-eq vname (caddar binds))
                             (let ((tmp (make-ssavalue)))
                               `(scope-block
                                 (block (= ,tmp ,(caddar binds))
@@ -1123,23 +1136,6 @@
                                (local-def ,(cadar binds))
                                (= ,vname ,(caddar binds))
                                ,blk))))))
-               ((and (pair? (cadar binds))
-                     (or (eq? (caadar binds) 'call)
-                         (and (eq? (caadar binds) 'comparison)
-                              (length= (cadar binds) 4))))
-                ;; f()=c
-                (let* ((asgn (butlast (expand-forms (car binds))))
-                       (name (cadr (cadar binds)))
-                       (name (cond ((symbol? name) name)
-                                   ((and (pair? name) (eq? (car name) 'curly))
-                                    (cadr name))
-                                   (else (error "invalid let syntax")))))
-                  (loop (cdr binds)
-                        `(scope-block
-                          (block
-                           (local-def ,name)
-                           ,asgn
-                           ,blk)))))
                ;; (a, b, c, ...) = rhs
                ((and (pair? (cadar binds))
                      (eq? (caadar binds) 'tuple))
@@ -1332,7 +1328,7 @@
 (define (assigned-name e)
   (cond ((atom? e) e)
         ((or (memq (car e) '(call curly where))
-             (and (eq? (car e) '|::|) (eventually-call e)))
+             (and (eq? (car e) '|::|) (eventually-call? e)))
          (assigned-name (cadr e)))
         (else e)))
 
@@ -1379,24 +1375,32 @@
                 (unnecessary (tuple ,@(reverse elts))))
         (let ((L (car lhss))
               (R (car rhss)))
-          (if (and (symbol-like? L)
-                   (or (not (pair? R)) (quoted? R) (equal? R '(null)))
-                   ;; overwrite var immediately if it doesn't occur elsewhere
-                   (not (contains (lambda (e) (eq-sym? e L)) (cdr rhss)))
-                   (not (contains (lambda (e) (eq-sym? e R)) assigned)))
-              (loop (cdr lhss)
-                    (cons L assigned)
-                    (cdr rhss)
-                    (cons (make-assignment L R) stmts)
-                    after
-                    (cons R elts))
-              (let ((temp (make-ssavalue)))
-                (loop (cdr lhss)
-                      (cons L assigned)
-                      (cdr rhss)
-                      (cons (make-assignment temp R) stmts)
-                      (cons (make-assignment L temp) after)
-                      (cons temp elts))))))))
+          (cond ((and (symbol-like? L)
+                      (or (not (pair? R)) (quoted? R) (equal? R '(null)))
+                      ;; overwrite var immediately if it doesn't occur elsewhere
+                      (not (contains (lambda (e) (eq-sym? e L)) (cdr rhss)))
+                      (not (contains (lambda (e) (eq-sym? e R)) assigned)))
+                 (loop (cdr lhss)
+                       (cons L assigned)
+                       (cdr rhss)
+                       (cons (make-assignment L R) stmts)
+                       after
+                       (cons R elts)))
+                ((vararg? R)
+                 (let ((temp (make-ssavalue)))
+                   `(block ,@(reverse stmts)
+                           ,(make-assignment temp (cadr R))
+                           ,@(reverse after)
+                           (= (tuple ,@lhss) ,temp)
+                           (unnecessary (tuple ,@(reverse elts) (... ,temp))))))
+                (else
+                 (let ((temp (if (eventually-call? L) (gensy) (make-ssavalue))))
+                   (loop (cdr lhss)
+                         (cons L assigned)
+                         (cdr rhss)
+                         (cons (make-assignment temp R) stmts)
+                         (cons (make-assignment L temp) after)
+                         (cons temp elts)))))))))
 
 ;; convert (lhss...) = x to tuple indexing
 (define (lower-tuple-assignment lhss x)
@@ -1406,7 +1410,7 @@
       ,@(let loop ((lhs lhss)
                    (i   1))
           (if (null? lhs) '((null))
-              (cons (if (eventually-call (car lhs))
+              (cons (if (eventually-call? (car lhs))
                         ;; if this is a function assignment, avoid putting our ssavalue
                         ;; inside the function and instead create a capture-able variable.
                         ;; issue #22032
@@ -1674,6 +1678,7 @@
     (if (and (null? splat)
              (length= expr 3) (eq? (car expr) 'call)
              (eq? (caddr expr) argname)
+             (not (dotop? (cadr expr)))
              (not (expr-contains-eq argname (cadr expr))))
         (cadr expr)  ;; eta reduce `x->f(x)` => `f`
         `(-> ,argname (block ,@splat ,expr)))))
@@ -1966,13 +1971,20 @@
           ;; multiple assignment
           (let ((lhss (cdr lhs))
                 (x    (caddr e)))
+            (define (sides-match? l r)
+              ;; l and r either have equal lengths, or r has a trailing ...
+              (cond ((null? l)          (null? r))
+                    ((null? r)          #f)
+                    ((vararg? (car r))  (null? (cdr r)))
+                    (else               (sides-match? (cdr l) (cdr r)))))
             (if (and (pair? x) (pair? lhss) (eq? (car x) 'tuple)
-                     (length= lhss (length (cdr x))))
+                     (sides-match? lhss (cdr x)))
                 ;; (a, b, ...) = (x, y, ...)
                 (expand-forms
                  (tuple-to-assignments lhss x))
                 ;; (a, b, ...) = other
-                (let* ((xx  (if (and (symbol? x) (not (memq x lhss)))
+                (let* ((xx  (if (or (and (symbol? x) (not (memq x lhss)))
+                                    (ssavalue? x))
                                 x (make-ssavalue)))
                        (ini (if (eq? x xx) '() `((= ,xx ,(expand-forms x)))))
                        (st  (gensy)))
@@ -2160,7 +2172,7 @@
    '=>
    (lambda (e)
      (syntax-deprecation #f "Expr(:(=>), ...)" "Expr(:call, :(=>), ...)")
-     `(call => ,(expand-forms (cadr e)) ,(expand-forms (caddr e))))
+     (expand-forms `(call => ,@(cdr e))))
 
    'cell1d (lambda (e) (error "{ } vector syntax is discontinued"))
    'cell2d (lambda (e) (error "{ } matrix syntax is discontinued"))
@@ -2256,13 +2268,13 @@
              (and (length= e 4)
                   (eq? (cadddr e) ':)))
          (error "invalid \":\" outside indexing"))
-     `(call colon ,.(map expand-forms (cdr e))))
+     (expand-forms `(call colon ,@(cdr e))))
 
    'vect
    (lambda (e) (expand-forms `(call (top vect) ,@(cdr e))))
 
    'hcat
-   (lambda (e) (expand-forms `(call hcat ,.(map expand-forms (cdr e)))))
+   (lambda (e) (expand-forms `(call hcat ,@(cdr e))))
 
    'vcat
    (lambda (e)
@@ -2285,7 +2297,7 @@
                 `(call vcat ,@a))))))
 
    'typed_hcat
-   (lambda (e) `(call (top typed_hcat) ,(expand-forms (cadr e)) ,.(map expand-forms (cddr e))))
+   (lambda (e) (expand-forms `(call (top typed_hcat) ,@(cdr e))))
 
    'typed_vcat
    (lambda (e)
@@ -2306,8 +2318,8 @@
                      ,.(apply append rows)))
             `(call (top typed_vcat) ,t ,@a)))))
 
-   '|'|  (lambda (e) `(call ctranspose ,(expand-forms (cadr e))))
-   '|.'| (lambda (e) `(call  transpose ,(expand-forms (cadr e))))
+   '|'|  (lambda (e) (expand-forms `(call ctranspose ,(cadr e))))
+   '|.'| (lambda (e) (expand-forms `(call  transpose ,(cadr e))))
 
    'ccall
    (lambda (e)
@@ -2348,7 +2360,7 @@
                ,iter))))
 
    'flatten
-   (lambda (e) `(call (top Flatten) ,(expand-forms (cadr e))))
+   (lambda (e) (expand-forms `(call (top Flatten) ,(cadr e))))
 
    'comprehension
    (lambda (e)
@@ -2381,11 +2393,10 @@
         (oneresult (make-ssavalue))
         (lengths   (map (lambda (x) (make-ssavalue)) ranges))
         (states    (map (lambda (x) (gensy)) ranges))
-        (is        (map (lambda (x) (gensy)) ranges))
         (rv        (map (lambda (x) (make-ssavalue)) ranges)))
 
     ;; construct loops to cycle over all dimensions of an n-d comprehension
-    (define (construct-loops ranges rv is states lengths)
+    (define (construct-loops ranges rv states lengths)
       (if (null? ranges)
           `(block (= ,oneresult ,expr)
                   (inbounds true)
@@ -2394,28 +2405,27 @@
                   (= ,ri (call (top +) ,ri 1)))
           `(block
             (= ,(car states) (call (top start) ,(car rv)))
-            (local (:: ,(car is) (call (core typeof) ,(car lengths))))
-            (= ,(car is) 0)
-            (while (call (top !=) ,(car is) ,(car lengths))
+            (while (call (top !) (call (top done) ,(car rv) ,(car states)))
                    (scope-block
                    (block
-                    (= ,(car is) (call (top +) ,(car is) 1))
                     (= (tuple ,(cadr (car ranges)) ,(car states))
                        (call (top next) ,(car rv) ,(car states)))
                     ;; *** either this or force all for loop vars local
                     ,.(map (lambda (r) `(local ,r))
                            (lhs-vars (cadr (car ranges))))
-                    ,(construct-loops (cdr ranges) (cdr rv) (cdr is) (cdr states) (cdr lengths))))))))
+                    ,(construct-loops (cdr ranges) (cdr rv) (cdr states) (cdr lengths))))))))
 
     ;; Evaluate the comprehension
     `(block
+      ,.(map (lambda (v) `(local ,v)) states)
+      (local ,ri)
       ,.(map (lambda (v r) `(= ,v ,(caddr r))) rv ranges)
       ,.(map (lambda (v r) `(= ,v (call (top length) ,r))) lengths rv)
       (scope-block
        (block
         (= ,result (call (curly Array ,atype ,(length lengths)) ,@lengths))
         (= ,ri 1)
-        ,(construct-loops (reverse ranges) (reverse rv) is states (reverse lengths))
+        ,(construct-loops (reverse ranges) (reverse rv) states (reverse lengths))
         ,result)))))
 
 (define (lhs-vars e)
@@ -2433,7 +2443,7 @@
         (else '())))
 
 (define (all-decl-vars e)  ;; map decl-var over every level of an assignment LHS
-  (cond ((eventually-call e) e)
+  (cond ((eventually-call? e) e)
         ((decl? e)   (decl-var e))
         ((and (pair? e) (eq? (car e) 'tuple))
          (cons 'tuple (map all-decl-vars (cdr e))))
@@ -2943,14 +2953,29 @@ f(x) = yt(x)
     (take body)
     (reverse! acc)))
 
+;; find all methods for the same function as `ex` in `body`
+(define (all-methods-for ex body)
+  (let ((mname (method-expr-name ex)))
+    (expr-find-all (lambda (s)
+                     (and (length> s 2) (eq? (car s) 'method)
+                          (eq? (method-expr-name s) mname)))
+                   body
+                   identity
+                   (lambda (x) (and (pair? x) (not (eq? (car x) 'lambda)))))))
+
 ;; clear capture bit for vars assigned once at the top, to avoid allocating
 ;; some unnecessary Boxes.
 (define (lambda-optimize-vars! lam)
-  (define (expr-uses-var ex v)
+  (define (expr-uses-var ex v stmts)
     (cond ((assignment? ex) (expr-contains-eq v (caddr ex)))
           ((eq? (car ex) 'method)
            (and (length> ex 2)
-                (assq v (cadr (lam:vinfo (cadddr ex))))))
+                ;; a method expression captures a variable if any methods for the
+                ;; same function do.
+                (let ((all-methods (all-methods-for ex (cons 'body stmts))))
+                  (any (lambda (ex)
+                         (assq v (cadr (lam:vinfo (cadddr ex)))))
+                       all-methods))))
           (else (expr-contains-eq v ex))))
   (assert (eq? (car lam) 'lambda))
   (let ((vi (car (lam:vinfo lam))))
@@ -2975,7 +3000,7 @@ f(x) = yt(x)
           ;; TODO: reorder leading statements to put assignments where the RHS is
           ;; `simple-atom?` at the top.
           (for-each (lambda (e)
-                      (set! unused (filter (lambda (v) (not (expr-uses-var e v)))
+                      (set! unused (filter (lambda (v) (not (expr-uses-var e v leading)))
                                            unused))
                       (if (and (memq (car e) '(method =)) (memq (cadr e) unused))
                           (let ((v (assq (cadr e) vi)))
@@ -3125,9 +3150,8 @@ f(x) = yt(x)
                                         (and name
                                              (symbol (string "#" name "#" (current-julia-module-counter))))))
                         (alldefs (expr-find-all
-                                  (lambda (ex) (and (eq? (car ex) 'method)
+                                  (lambda (ex) (and (length> ex 2) (eq? (car ex) 'method)
                                                     (not (eq? ex e))
-                                                    (length> ex 2)
                                                     (eq? (method-expr-name ex) name)))
                                   (lam:body lam)
                                   identity

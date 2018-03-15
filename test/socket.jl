@@ -69,27 +69,29 @@ end
 # test show() function for UDPSocket()
 @test repr(UDPSocket()) == "UDPSocket(init)"
 
-port = Channel(1)
 defaultport = rand(2000:4000)
-tsk = @async begin
-    p, s = listenany(defaultport)
-    put!(port, p)
-    sock = accept(s)
-    # test write call
-    write(sock,"Hello World\n")
+for testport in [0, defaultport]
+    port = Channel(1)
+    tsk = @async begin
+        p, s = listenany(testport)
+        put!(port, p)
+        sock = accept(s)
+        # test write call
+        write(sock,"Hello World\n")
 
-    # test "locked" println to a socket
-    @sync begin
-        for i in 1:100
-            @async println(sock, "a", 1)
+        # test "locked" println to a socket
+        @sync begin
+            for i in 1:100
+                @async println(sock, "a", 1)
+            end
         end
+        close(s)
+        close(sock)
     end
-    close(s)
-    close(sock)
+    wait(port)
+    @test readstring(connect(fetch(port))) == "Hello World\n" * ("a1\n"^100)
+    wait(tsk)
 end
-wait(port)
-@test readstring(connect(fetch(port))) == "Hello World\n" * ("a1\n"^100)
-wait(tsk)
 
 mktempdir() do tmpdir
     socketname = is_windows() ? ("\\\\.\\pipe\\uv-test-" * randstring(6)) : joinpath(tmpdir, "socket")
@@ -349,3 +351,32 @@ let
     @test test_connect(addr)
 end
 
+# Issues #18818 and #24169
+mutable struct RLimit
+    cur::Int64
+    max::Int64
+end
+function with_ulimit(f::Function, stacksize::Int)
+    RLIMIT_STACK = 3 # from /usr/include/sys/resource.h
+    rlim = Ref(RLimit(0, 0))
+    # Get the current maximum stack size in bytes
+    rc = ccall(:getrlimit, Cint, (Cint, Ref{RLimit}), RLIMIT_STACK, rlim)
+    @assert rc == 0
+    current = rlim[].cur
+    try
+        rlim[].cur = stacksize * 1024
+        ccall(:setrlimit, Cint, (Cint, Ref{RLimit}), RLIMIT_STACK, rlim)
+        f()
+    finally
+        rlim[].cur = current
+        ccall(:setrlimit, Cint, (Cint, Ref{RLimit}), RLIMIT_STACK, rlim)
+    end
+    nothing
+end
+@static if is_apple()
+    @testset "Issues #18818 and #24169" begin
+        with_ulimit(7001) do
+            @test getaddrinfo("localhost") isa IPAddr
+        end
+    end
+end

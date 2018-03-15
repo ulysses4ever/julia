@@ -177,6 +177,16 @@ struct C21923{T,N}; v::C21923{T,M} where M; end
 struct D21923{T,N}; v::D21923{T}; end
 @test fieldtype(D21923, 1) == D21923
 
+# issue #22624, more circular definitions
+struct T22624{A,B,C}; v::Vector{T22624{Int64,A}}; end
+let elT = T22624.body.body.body.types[1].parameters[1]
+    @test elT == T22624{Int64, T22624.var, C} where C
+    elT2 = elT.body.types[1].parameters[1]
+    @test elT2 == T22624{Int64, Int64, C} where C
+    @test elT2.body.types[1].parameters[1] === elT2
+    @test isleaftype(elT2.body.types[1])
+end
+
 # issue #3890
 mutable struct A3890{T1}
     x::Matrix{Complex{T1}}
@@ -333,6 +343,27 @@ let f = i18408()
     @test_throws UndefRefError f(0)
 end
 
+# issue #23558
+c23558(n,k) =
+    let fact(n) = if (n == 0) 1 else n*fact(n-1) end
+        fact(n)/fact(k)/fact(n-k)
+    end
+@test c23558(10, 5) == 252
+
+# issue #23996
+function foo23996(xs...)
+    rets = []
+    bar(::Int) = push!(rets, 1)
+    foobar() = push!(rets, 3)
+    bar(::AbstractFloat) = push!(rets, 2)
+    bar(::Bool) = foobar()
+    for x in xs
+	bar(x)
+    end
+    rets
+end
+@test foo23996(1,2.0,false) == [1,2,3]
+
 # variable scope, globals
 glob_x = 23
 function glotest()
@@ -474,6 +505,12 @@ let t = (22,33)
     (g(), x) = t
     @test g() == 22
     @test x == 33
+end
+
+# issue #23091
+let (f(), x) = (1, 2)
+    @test f() == 1
+    @test x == 2
 end
 
 # issue #21900
@@ -883,6 +920,12 @@ let
     @test foor(Base.unwrap_unionall(StridedArray)) == 1
     @test_throws MethodError foor(StridedArray)
 end
+
+# issue #22842
+f22842(x::UnionAll) = UnionAll
+f22842(x::DataType) = length(x.parameters)
+@test f22842(Tuple{Vararg{Int64,N} where N}) == 1
+@test f22842(Tuple{Vararg{Int64,N}} where N) === UnionAll
 
 # issue #1153
 mutable struct SI{m, s, kg}
@@ -4969,3 +5012,9 @@ end
 end
 @test M22026.foofunction(Int16) === Int16
 @test M22026.foofunction2(3) === 6.0f0
+
+# issue #23218
+let idx = (7,5,9)
+    (v,) = (idx...,)
+    @test v == 7
+end

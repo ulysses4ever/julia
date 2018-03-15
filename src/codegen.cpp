@@ -1325,7 +1325,11 @@ jl_llvm_functions_t jl_compile_linfo(jl_method_instance_t **pli, jl_code_info_t 
 
     JL_UNLOCK(&codegen_lock); // Might GC
 
-    if (dump_compiles_stream != NULL) {
+    // If logging of the compilation stream is enabled then dump the function to the stream
+    // ... unless li->def isn't defined here meaning the function is a toplevel thunk and
+    // would have its CodeInfo printed in the stream, which might contain double-quotes that
+    // would not be properly escaped given the double-quotes added to the stream below.
+    if (dump_compiles_stream != NULL && li->def) {
         uint64_t this_time = jl_hrtime();
         jl_printf(dump_compiles_stream, "%" PRIu64 "\t\"", this_time - last_time);
         jl_static_show(dump_compiles_stream, (jl_value_t*)li);
@@ -2620,6 +2624,8 @@ static Value *emit_f_is(const jl_cgval_t &arg1, const jl_cgval_t &arg2, jl_codec
     if ((jl_is_type_type(rt1) && jl_is_leaf_type(jl_tparam0(rt1))) ||
         (jl_is_type_type(rt2) && jl_is_leaf_type(jl_tparam0(rt2)))) // can compare leaf types by pointer
         ptr_comparable = 1;
+    if (rt1 == (jl_value_t*)jl_simplevector_type && rt2 == (jl_value_t*)jl_simplevector_type)
+        ptr_comparable = 0; // technically mutable, but compared by contents
     if (ptr_comparable) {
         Value *varg1 = arg1.constant ? literal_pointer_val(arg1.constant) : arg1.V;
         Value *varg2 = arg2.constant ? literal_pointer_val(arg2.constant) : arg2.V;
@@ -5302,7 +5308,7 @@ static std::unique_ptr<Module> emit_function(
 
     // allocate Function declarations and wrapper objects
     Module *M = new Module(ctx.name, jl_LLVMContext);
-    jl_setup_module(M);
+    jl_setup_module(M, params);
     jl_returninfo_t returninfo = {};
     Function *f = NULL;
     Function *fwrap = NULL;

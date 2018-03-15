@@ -86,6 +86,10 @@ end
 
     i = IntSet(1:6)
     @test symdiff!(i, IntSet([6, 513])) == IntSet([1:5; 513])
+
+    # issue #23099 : these tests should not segfault
+    @test_throws ArgumentError symdiff!(IntSet(rand(1:100, 30)), 0)
+    @test_throws ArgumentError symdiff!(IntSet(rand(1:100, 30)), [0, 2, 4])
 end
 
 @testset "copy, copy!, similar" begin
@@ -280,4 +284,11 @@ end
     @test_throws KeyError pop!(s, 0)
     @test pop!(s, 100, 0) === 0
     @test pop!(s, 99, 0) === 99
+end
+
+@testset "unsigned overflow" begin
+    @test IntSet(UInt8(2^8-1)) == IntSet(2^8-1)
+    @test [x for x in IntSet(UInt8(2^8-1))] == [UInt8(2^8-1)]
+    @test IntSet(UInt16(2^16-1)) == IntSet(2^16-1)
+    @test [x for x in IntSet(UInt16(2^16-1))] == [UInt16(2^16-1)]
 end
