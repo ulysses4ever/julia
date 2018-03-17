@@ -1076,7 +1076,11 @@ JL_DLLEXPORT int jl_subtype(jl_value_t *x, jl_value_t *y)
       fcntl(streamno, F_SETFL,
                     old_flags & ~O_NONBLOCK);
 
-      jl_printf(JL_STDERR, "subt:\n");
+      if(jl_has_free_typevars(x) || jl_has_free_typevars(y)) {
+        jl_printf(JL_STDERR, "subt-fv:\n");
+      } else {
+        jl_printf(JL_STDERR, "subt:\n");
+      }
       jl_(x);
       jl_(y);
       jl_printf(JL_STDERR, "%d\n\n", r);
